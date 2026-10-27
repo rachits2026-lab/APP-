@@ -6,7 +6,7 @@ import { playPracticeChirps, playTestAlarm, ScriptedListener, walkThrough } from
 import { readLabel } from './ocr.js';
 import { dueNow, fireDueNotifications, enableNotifications, notificationsSupported, downloadCalendar } from './reminders.js';
 import { mascot, setMood, react } from './mascot.js';
-import { createHatch } from './sprite.js';
+import { createHatch, preloadHatch } from './sprite.js';
 import { confetti, countUp } from './fx.js';
 
 const app = document.getElementById('main');
@@ -86,10 +86,30 @@ const routes = [
 
 // Leaving a screen fades it out first, then the next one fades in.
 let routeToken = 0;
+let lastPath = '';
+let booted = false;
+const splash = document.getElementById('splash');
+const LOADING_MS = 1700;
+
+// Going from the welcome screen into the app shows the loading screen (the
+// egg and the logo) for a moment. Switching tabs never does.
 function route() {
   cleanup?.();
   cleanup = null;
   const token = ++routeToken;
+  const path = location.hash.slice(1) || '/';
+  if (booted && lastPath === '/welcome' && path !== '/welcome') {
+    splash?.classList.remove('out');
+    setTimeout(() => {
+      if (token !== routeToken) return;
+      render();
+      splash?.classList.add('out');
+    }, LOADING_MS);
+    return;
+  }
+  if (booted) splash?.classList.add('out');
+  // The tab highlight starts gliding straight away; the page fades behind it.
+  if (booted && lastPath !== '/welcome' && path !== '/welcome') markTabs(path);
   const soft = app.childElementCount && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (!soft) return render();
   app.classList.add('leaving');
@@ -99,6 +119,7 @@ function route() {
 function render() {
   app.classList.remove('leaving');
   const path = location.hash.slice(1) || '/';
+  lastPath = path;
   document.body.classList.toggle('on-welcome', path === '/welcome');
   try {
     for (const [re, fn] of routes) {
@@ -108,12 +129,7 @@ function render() {
   } catch (err) {
     showError(err);
   }
-  document.querySelectorAll('.tabs a').forEach((a) => {
-    const tab = a.dataset.tab;
-    const on = tab === 'home' ? path === '/' : path.startsWith('/' + tab) || (tab === 'detectors' && /^\/(add|detector)/.test(path));
-    if (on) a.setAttribute('aria-current', 'page');
-    else a.removeAttribute('aria-current');
-  });
+  markTabs(path);
   replayEnter();
   updateStreak();
   window.scrollTo(0, 0);
@@ -137,14 +153,45 @@ window.addEventListener('error', (e) => {
 });
 window.addEventListener('unhandledrejection', (e) => console.error(e.reason));
 
-// Restart the slide-in animation each time a screen is drawn.
+// Restart the fade-in each time a screen is drawn.
 function replayEnter() {
   app.classList.remove('enter');
   void app.offsetWidth;
   app.classList.add('enter');
 }
 
-window.addEventListener('hashchange', route);
+// The highlight on the tab bar is one pill that glides to the selected tab.
+// It jumps (no glide) the first time it appears and when the window resizes.
+const tabBar = document.querySelector('.tabs');
+let pillPlaced = false;
+
+function markTabs(path) {
+  document.querySelectorAll('.tabs a').forEach((a) => {
+    const tab = a.dataset.tab;
+    const on = tab === 'home' ? path === '/' : path.startsWith('/' + tab) || (tab === 'detectors' && /^\/(add|detector)/.test(path));
+    if (on) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  moveTabPill();
+}
+
+function moveTabPill(snap = false) {
+  const current = tabBar.querySelector('a[aria-current="page"]');
+  if (!current || !current.offsetWidth) { tabBar.classList.add('no-pill'); pillPlaced = false; return; }
+  tabBar.style.setProperty('--px', `${current.offsetLeft}px`);
+  tabBar.style.setProperty('--pw', `${current.offsetWidth}px`);
+  const jump = snap || !pillPlaced;
+  if (jump) {
+    tabBar.classList.add('snap');
+    void tabBar.offsetWidth;
+  }
+  tabBar.classList.remove('no-pill');
+  if (jump) requestAnimationFrame(() => tabBar.classList.remove('snap'));
+  pillPlaced = true;
+}
+window.addEventListener('resize', () => moveTabPill(true));
+
+window.addEventListener('hashchange', () => { if (booted) route(); });
 
 // ---------- welcome ----------
 // Shown every time the app opens. The chick hatches, rests on its last frame,
@@ -778,9 +825,15 @@ function aboutView() {
 
 // ---------- boot ----------
 // The app always opens on the welcome screen.
+// The loading screen is already showing (it is in index.html). Hold it for a
+// moment while the hatch animation loads, then fade it out into the welcome.
 history.replaceState(null, '', '#/welcome');
-route();
-fireDueNotifications();
+const minimum = new Promise((r) => setTimeout(r, 1400));
+const ready = Promise.race([preloadHatch(), new Promise((r) => setTimeout(r, 2500))]);
+Promise.all([minimum, ready]).then(() => {
+  splash?.classList.add('out');
+  setTimeout(() => { booted = true; route(); fireDueNotifications(); }, 300);
+});
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   navigator.serviceWorker.register('./sw.js').catch(() => {});

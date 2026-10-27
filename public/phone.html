@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chirp Hunter on a phone</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: #2b1d0e; color: #f4eee0;
+      font: 16px/1.4 system-ui, 'Segoe UI', sans-serif;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+      overflow: hidden;
+    }
+
+    /* The phone is built at its real size, then scaled to fit the window. */
+    .stage { width: 430px; height: 904px; transform-origin: center center; flex: none; }
+    .phone {
+      position: relative; width: 430px; height: 904px; padding: 20px;
+      background: #0d0b09; border-radius: 68px;
+      box-shadow: 0 0 0 3px #4a3c2a, 0 30px 70px rgba(0, 0, 0, .55);
+    }
+    .phone::before, .phone::after { content: ''; position: absolute; width: 4px; background: #4a3c2a; border-radius: 2px; }
+    .phone::before { left: -7px; top: 190px; height: 74px; }
+    .phone::after { right: -7px; top: 260px; height: 110px; }
+    .screen { position: relative; width: 390px; height: 864px; border-radius: 50px; overflow: hidden; background: #ffd23f; }
+
+    .status {
+      position: absolute; top: 0; left: 0; right: 0; height: 44px; z-index: 2; background: #ffd23f;
+      display: flex; align-items: center; justify-content: space-between; padding: 6px 30px 0 34px;
+      font-weight: 700; font-size: 15px; color: #2b1d0e;
+    }
+    .island { position: absolute; top: 11px; left: 50%; width: 112px; height: 32px; margin-left: -56px; background: #0d0b09; border-radius: 20px; z-index: 3; }
+    .icons { display: flex; gap: 6px; align-items: center; }
+    .icons i { display: block; background: #2b1d0e; border-radius: 2px; }
+    .icons .sig { width: 18px; height: 11px; clip-path: polygon(0 100%, 0 70%, 30% 70%, 30% 45%, 60% 45%, 60% 20%, 100% 20%, 100% 100%); }
+    .icons .bat { width: 26px; height: 12px; border-radius: 4px; }
+
+    iframe { position: absolute; top: 44px; left: 0; width: 390px; height: 820px; border: 0; background: #ffd23f; }
+    .home-bar { position: absolute; bottom: 7px; left: 50%; width: 130px; height: 5px; margin-left: -65px; background: #2b1d0e; border-radius: 3px; opacity: .55; z-index: 3; pointer-events: none; }
+
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+    button {
+      font: inherit; font-weight: 700; color: #2b1d0e; background: #ffd23f; border: 0; border-radius: 14px;
+      padding: 10px 18px; cursor: pointer; box-shadow: 0 3px 0 #b88a00;
+    }
+    button:active { transform: translateY(3px); box-shadow: none; }
+    button.quiet { background: transparent; color: #f4eee0; box-shadow: none; text-decoration: underline; }
+    .hint { font-size: 14px; opacity: .75; text-align: center; max-width: 440px; }
+  </style>
+</head>
+<body>
+  <div class="stage" id="stage">
+    <div class="phone">
+      <div class="screen">
+        <div class="island"></div>
+        <div class="status"><span id="clock">9:41</span><span class="icons"><i class="sig"></i><i class="bat"></i></span></div>
+        <iframe id="app" src="./" title="Chirp Hunter" allow="microphone; autoplay; fullscreen; vibrate; clipboard-write"></iframe>
+        <div class="home-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls" id="controls">
+    <button id="restart">Restart app</button>
+    <button id="reset" class="quiet">Reset data and restart</button>
+  </div>
+  <div class="hint" id="hint">The microphone prompt appears inside the phone. Allow it once, then use Demo tools on the start screen.</div>
+
+  <script>
+    var stage = document.getElementById('stage');
+    var frame = document.getElementById('app');
+    var controls = document.getElementById('controls');
+    var hint = document.getElementById('hint');
+
+    function fit() {
+      var room = window.innerHeight - controls.offsetHeight - hint.offsetHeight - 54;
+      var scale = Math.min(1, room / 904, (window.innerWidth - 24) / 430);
+      stage.style.transform = 'scale(' + scale + ')';
+      stage.style.margin = (-(904 * (1 - scale)) / 2) + 'px ' + (-(430 * (1 - scale)) / 2) + 'px';
+    }
+    window.addEventListener('resize', fit);
+    fit();
+
+    function tick() {
+      var d = new Date();
+      var h = d.getHours() % 12 || 12;
+      document.getElementById('clock').textContent = h + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+    tick();
+    setInterval(tick, 20000);
+
+    document.getElementById('restart').onclick = function () { frame.contentWindow.location.reload(); };
+    document.getElementById('reset').onclick = function () {
+      try { frame.contentWindow.localStorage.clear(); } catch (e) {}
+      frame.contentWindow.location.reload();
+    };
+  </script>
+</body>
+</html>

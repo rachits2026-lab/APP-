@@ -6,6 +6,13 @@ import meta from './hatch-meta.json';
 const SHEET = `${import.meta.env.BASE_URL}mascot/hatch.webp`;
 const reduced = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+// Warm the sprite sheet up while the loading screen is showing.
+export function preloadHatch() {
+  const img = new Image();
+  img.src = SHEET;
+  return img.decode().catch(() => {});
+}
+
 export function createHatch() {
   const el = document.createElement('div');
   el.className = 'hatch';

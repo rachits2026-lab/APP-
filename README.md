@@ -29,6 +29,13 @@ Open the app, then tap **Demo tools** on the start screen.
 
 **Clear everything** on the demo page resets the phone to a clean start.
 
+## Showing it on a computer
+
+- **Phone frame (easiest):** `npm run demo` opens the app inside a phone-shaped frame at `/phone.html`. The microphone works; allow it once inside the phone. "Reset data and restart" gives a clean start between runs.
+- **Browser device mode:** open the app, press F12, then Ctrl+Shift+M and pick a phone such as Pixel 7. Reload once after choosing.
+- **Android emulator:** in Android Studio create a Pixel virtual device and start it. In a terminal run `adb reverse tcp:5173 tcp:5173`, then open `http://localhost:5173` in the emulator's Chrome (localhost counts as secure, so the microphone is allowed). In the emulator's Extended controls, Microphone, turn on "Virtual microphone uses host audio input".
+- **A real phone on the same Wi-Fi:** `npm run dev:phone` and open the https address it prints (accept the certificate warning).
+
 ## Notes
 
 - Detection listens for a sharp tone between 2 and 5 kHz, which is where smoke detector beeps are. Thresholds are in `src/audio.js` and may need tuning on a particular phone.
