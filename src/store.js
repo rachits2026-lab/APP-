@@ -71,7 +71,7 @@ export function statusOf(d) {
     if (left <= REPLACE_WARN_DAYS) return { code: 'soon', label: 'Replace within a year', detail: `${left} days left` };
   }
   const since = daysBetween(d.batteryDate, now);
-  if (since >= BATTERY_DUE_DAYS) return { code: 'battery', label: 'Battery due soon', detail: `Changed ${since} days ago` };
+  if (since >= BATTERY_DUE_DAYS) return { code: 'battery', label: 'Battery overdue', detail: `Changed ${since} days ago` };
   if (!d.madeDate) return { code: 'unknown', label: 'Add made date', detail: 'Age unknown' };
   return { code: 'ok', label: 'OK', detail: '' };
 }

@@ -1,9 +1,9 @@
 import './style.css';
 import * as S from './store.js';
-import { today, fmt, fmtMonth, ageText, nextDst, iso } from './dates.js';
+import { today, fmt, fmtMonth, ageText } from './dates.js';
 import { Listener, ChirpDetector, meterValue, micErrorText, buzz } from './audio.js';
 import { readLabel } from './ocr.js';
-import { dueNow, fireDueNotifications, enableNotifications, notificationsSupported, downloadCalendar } from './reminders.js';
+import { dueNow, upcoming, fireDueNotifications, enableNotifications, notificationsSupported, downloadCalendar } from './reminders.js';
 
 const app = document.getElementById('main');
 let cleanup = null;
@@ -403,6 +403,12 @@ function testView() {
       const r = listener.read();
       const elapsed = now - t0;
 
+      // Skip silent frames (-Infinity); they would poison the floor.
+      if (!Number.isFinite(r.level) || !Number.isFinite(r.tonal)) {
+        if (elapsed > 20000) return finish(false, 'No alarm heard');
+        raf = requestAnimationFrame(tick);
+        return;
+      }
       if (elapsed < 500) {
         warm.push(r.level);
         raf = requestAnimationFrame(tick);
@@ -465,19 +471,7 @@ function testView() {
 
 // ---------- reminders ----------
 function remindersView() {
-  const dst = nextDst();
-  const rows = [];
-  if (dst) rows.push([fmt(iso(dst.date)), `Clocks ${dst.kind === 'start' ? 'spring forward' : 'fall back'}. Change all batteries.`]);
-  const first = new Date();
-  first.setDate(1);
-  first.setMonth(first.getMonth() + 1);
-  rows.push([fmt(iso(first)), 'Monthly test, then the first of every month.']);
-  for (const d of S.detectors()) {
-    if (!d.madeDate) continue;
-    rows.push([fmt(S.replaceBy(d)), `Replace ${d.name}. Ten years old.`]);
-  }
-  rows.sort((a, b) => (a[0] < b[0] ? -1 : 1));
-
+  const rows = upcoming();
   const perm = notificationsSupported() ? Notification.permission : 'unsupported';
   const notifyMsg = h('p', { class: 'hint', 'aria-live': 'polite' },
     perm === 'granted' ? 'On. You will see these when you open the app.' :
@@ -488,7 +482,7 @@ function remindersView() {
     h('h1', null, 'Reminders'),
     h('p', { class: 'lead' }, 'Battery changes when the clocks change, a test every month, and a warning before each detector turns ten.'),
     h('h2', null, 'Coming up'),
-    h('div', null, rows.map(([when, what]) => h('div', { class: 'rem' }, h('strong', null, when), what))),
+    h('div', null, rows.map((r) => h('div', { class: 'rem' }, h('strong', { class: r.overdue ? 'fail' : null }, fmt(r.date)), r.text))),
     h('h2', null, 'Get alerts'),
     h('p', null, 'This app has no server, so it cannot wake your phone by itself. Two ways to get alerts anyway:'),
     h('h3', null, 'Calendar (most reliable)'),

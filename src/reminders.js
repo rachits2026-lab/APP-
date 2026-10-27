@@ -20,8 +20,7 @@ export function dueNow() {
     }
   }
 
-  const day = new Date().getDate();
-  if (detectors().length && !testedThisMonth() && day >= 1) {
+  if (detectors().length && !testedThisMonth()) {
     out.push({
       key: `test-${now.slice(0, 7)}`,
       title: 'Monthly smoke detector test',
@@ -49,6 +48,26 @@ export function dueNow() {
   return out;
 }
 
+// The "Coming up" list, oldest first. Sorted on ISO dates, since sorting the
+// formatted text puts "Jan 2027" before "Nov 2026".
+export function upcoming() {
+  const now = today();
+  const rows = [];
+  const dst = nextDst();
+  if (dst) rows.push({ date: iso(dst.date), text: `Clocks ${dst.kind === 'start' ? 'spring forward' : 'fall back'}. Change all batteries.` });
+  const first = new Date();
+  first.setDate(1);
+  first.setMonth(first.getMonth() + 1);
+  rows.push({ date: iso(first), text: 'Monthly test, then the first of every month.' });
+  for (const d of detectors()) {
+    if (!d.madeDate) continue;
+    const date = replaceBy(d);
+    const overdue = date < now;
+    rows.push({ date, overdue, text: overdue ? `Overdue: replace ${d.name}. It is past ten years old.` : `Replace ${d.name}. Ten years old.` });
+  }
+  return rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
 export function notificationsSupported() {
   return 'Notification' in window;
 }
@@ -59,15 +78,23 @@ export async function enableNotifications() {
   return res;
 }
 
+// Android Chrome throws on `new Notification()`; it only allows notifications
+// shown through the service worker. Use that whenever one is registered.
+async function show(title, options) {
+  const reg = await navigator.serviceWorker?.getRegistration?.();
+  if (reg) await reg.showNotification(title, options);
+  else new Notification(title, options);
+}
+
 // Notifications can only be shown while the app has been opened, because the
 // app has no server to wake it up. The calendar file covers the rest.
-export function fireDueNotifications() {
+export async function fireDueNotifications() {
   if (!notificationsSupported() || Notification.permission !== 'granted') return;
   const seen = getState().settings.lastNotified;
   for (const item of dueNow()) {
     if (seen[item.key]) continue;
     try {
-      new Notification(item.title, { body: item.body, tag: item.key });
+      await show(item.title, { body: item.body, tag: item.key, icon: '/icon-192.png', data: { go: item.go || '#/' } });
       markNotified(item.key);
     } catch {}
   }

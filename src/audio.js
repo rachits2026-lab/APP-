@@ -3,6 +3,7 @@
 
 const BAND_LO = 2000;
 const BAND_HI = 5000;
+const MAX_CHIRP_MS = 900;
 
 export class Listener {
   constructor() {
@@ -83,10 +84,20 @@ export class ChirpDetector {
 
   // Feed one reading. Returns { peak, floor, ms } when a chirp has just ended.
   push(r, now) {
+    // The analyser reports -Infinity until audio arrives. Letting that into
+    // the floor turns it into NaN and nothing is ever detected.
+    if (!Number.isFinite(r.level) || !Number.isFinite(r.tonal)) return null;
     if (this.floor === null) this.floor = r.level;
     const loud = r.level > this.floor + this.margin && r.tonal > this.minTonal;
     if (loud) {
       if (!this.active) { this.active = true; this.peak = r.level; this.startedAt = now; }
+      // Too long to be a chirp: it is a steady sound (TV, appliance whine).
+      // Treat it as the new background so chirps on top of it still register.
+      if (now - this.startedAt > MAX_CHIRP_MS) {
+        this.active = false;
+        this.floor = r.level;
+        return null;
+      }
       this.peak = Math.max(this.peak, r.level);
       this.lastOn = now;
       return null;
@@ -99,7 +110,7 @@ export class ChirpDetector {
       const ms = this.lastOn - this.startedAt;
       // Detector chirps last roughly 50 to 400 ms. Much longer is a steady
       // sound, much shorter is a click.
-      if (ms >= 25 && ms <= 900) return { peak: this.peak, floor: this.floor, ms };
+      if (ms >= 25 && ms <= MAX_CHIRP_MS) return { peak: this.peak, floor: this.floor, ms };
     }
     return null;
   }
