@@ -1,0 +1,5 @@
+node_modules/
+dist/
+browser-checks/
+generated-images/
+.claude/
