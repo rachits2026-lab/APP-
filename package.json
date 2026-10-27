@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host",
+    "dev": "vite",
+    "dev:phone": "vite --host --mode phone",
     "build": "vite build",
-    "preview": "vite preview --host",
+    "start": "vite build && vite preview --host --port 4173",
     "test": "node --test test/logic.test.js"
   },
   "dependencies": {

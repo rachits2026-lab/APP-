@@ -2,13 +2,17 @@ import './style.css';
 import * as S from './store.js';
 import { today, fmt, fmtMonth, ageText, nextDst, iso } from './dates.js';
 import { Listener, ChirpDetector, meterValue, micErrorText, buzz } from './audio.js';
+import { playPracticeChirps, playTestAlarm, ScriptedListener, walkThrough } from './demo.js';
 import { readLabel } from './ocr.js';
 import { dueNow, fireDueNotifications, enableNotifications, notificationsSupported, downloadCalendar } from './reminders.js';
+import { mascot, setMood, react } from './mascot.js';
+import { createHatch } from './sprite.js';
+import { confetti, countUp } from './fx.js';
 
 const app = document.getElementById('main');
 let cleanup = null;
 
-// ---------- tiny DOM helper ----------
+// ---------- tiny DOM helpers ----------
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -43,63 +47,166 @@ function badge(status) {
   return h('span', { class: `badge ${status.code}` }, status.label);
 }
 
+// A light tap on every button, like a native app.
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.btn, .chip')) buzz(8);
+});
+
+// ---------- header streak ----------
+let lastStreak = -1;
+function updateStreak() {
+  const n = S.streak();
+  const pill = document.getElementById('streak');
+  document.getElementById('streak-n').textContent = String(n);
+  pill.classList.toggle('lit', n > 0);
+  pill.setAttribute('aria-label', `${n} month${n === 1 ? '' : 's'} in a row with every detector tested`);
+  if (lastStreak >= 0 && n > lastStreak) {
+    pill.classList.remove('bump');
+    void pill.offsetWidth;
+    pill.classList.add('bump');
+  }
+  lastStreak = n;
+}
+
 // ---------- router ----------
 const routes = [
   [/^\/$/, homeView],
-  [/^\/find$/, findView],
+  [/^\/welcome$/, welcomeView],
+  [/^\/find$/, () => findView('real')],
+  [/^\/find\/(practice|sim)$/, (m) => findView(m[1])],
   [/^\/add$/, () => formView(null)],
   [/^\/detectors$/, listView],
   [/^\/detector\/(.+)$/, (m) => (S.getDetector(m[1]) ? formView(S.getDetector(m[1])) : go('#/detectors'))],
-  [/^\/test$/, testView],
+  [/^\/test$/, () => testView('real')],
+  [/^\/test\/demo$/, () => testView('demo')],
+  [/^\/demo$/, demoView],
   [/^\/reminders$/, remindersView],
   [/^\/about$/, aboutView],
 ];
 
+// Leaving a screen fades it out first, then the next one fades in.
+let routeToken = 0;
 function route() {
   cleanup?.();
   cleanup = null;
+  const token = ++routeToken;
+  const soft = app.childElementCount && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!soft) return render();
+  app.classList.add('leaving');
+  setTimeout(() => { if (token === routeToken) render(); }, 160);
+}
+
+function render() {
+  app.classList.remove('leaving');
   const path = location.hash.slice(1) || '/';
-  for (const [re, fn] of routes) {
-    const m = path.match(re);
-    if (m) { fn(m); break; }
+  document.body.classList.toggle('on-welcome', path === '/welcome');
+  try {
+    for (const [re, fn] of routes) {
+      const m = path.match(re);
+      if (m) { fn(m); break; }
+    }
+  } catch (err) {
+    showError(err);
   }
   document.querySelectorAll('.tabs a').forEach((a) => {
-    const on = path.startsWith('/' + a.dataset.tab) || (a.dataset.tab === 'detectors' && /^\/(add|detector)/.test(path));
+    const tab = a.dataset.tab;
+    const on = tab === 'home' ? path === '/' : path.startsWith('/' + tab) || (tab === 'detectors' && /^\/(add|detector)/.test(path));
     if (on) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   });
+  replayEnter();
+  updateStreak();
   window.scrollTo(0, 0);
   app.focus({ preventScroll: true });
 }
 
+// If something breaks, say so on screen instead of leaving a dead page.
+function showError(err) {
+  console.error(err);
+  document.body.classList.remove('on-welcome');
+  show(
+    h('h1', null, 'Something went wrong'),
+    h('div', { class: 'error', role: 'alert' }, String(err && err.message ? err.message : err)),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn primary', onclick: () => location.reload() }, 'Reload'),
+      h('a', { class: 'btn', href: '#/welcome' }, 'Back to start')));
+}
+
+window.addEventListener('error', (e) => {
+  if (!app.childElementCount) showError(e.error || e.message);
+});
+window.addEventListener('unhandledrejection', (e) => console.error(e.reason));
+
+// Restart the slide-in animation each time a screen is drawn.
+function replayEnter() {
+  app.classList.remove('enter');
+  void app.offsetWidth;
+  app.classList.add('enter');
+}
+
 window.addEventListener('hashchange', route);
 
+// ---------- welcome ----------
+// Shown every time the app opens. The chick hatches, rests on its last frame,
+// then the title and buttons fade in.
+function welcomeView() {
+  const hatch = createHatch();
+  const page = h('div', { class: 'welcome' });
+  const top = h('div', { class: 'welcome-top', onclick: () => { react(top, 'bounce'); buzz(15); } }, hatch.el);
+  fill(page, [
+    top,
+    h('h1', { class: 'welcome-title' }, h('img', { src: `${import.meta.env.BASE_URL}logo.png`, alt: 'Chirp Hunter' })),
+    h('p', { class: 'welcome-sub' }, 'Find the chirping smoke detector fast, and never miss a battery change again.'),
+    h('div', { class: 'welcome-actions' },
+      h('a', { class: 'btn primary big', href: '#/find' }, 'Find a chirp'),
+      h('a', { class: 'btn big', href: '#/' }, 'Open the app'),
+      h('a', { class: 'btn ghost', href: '#/demo' }, 'Demo tools')),
+  ]);
+  show(page);
+
+  cleanup = () => hatch.stop();
+  // Fallback so the buttons always appear, even if the animation cannot run.
+  const reveal = () => page.classList.add('ready');
+  const failsafe = setTimeout(reveal, 3500);
+  hatch.play().finally(() => { clearTimeout(failsafe); reveal(); });
+}
+
 // ---------- home ----------
+function greeting() {
+  const list = S.detectors();
+  if (!list.length) return ['idle', 'Hi, I\'m Beep. Hear a chirp? Let\'s hunt it down.'];
+  if (list.some((d) => S.statusOf(d).code === 'replace')) return ['worried', 'One of your detectors is past its ten year life. Time to replace it.'];
+  if (!S.testedThisMonth()) return ['listening', 'Time for this month\'s test. It only takes a minute.'];
+  const n = S.streak();
+  return ['happy', n > 1 ? `${n} months in a row. Nice work.` : 'All tested this month. Nice work.'];
+}
+
 function homeView() {
   const list = S.detectors();
   const needs = list.filter((d) => S.statusOf(d).code !== 'ok');
   const due = dueNow();
-  const n = S.streak();
+  const [mood, line] = greeting();
+  const mas = mascot(mood, 112);
 
   const nodes = [
-    h('h1', null, 'Hear a chirp?'),
-    h('p', { class: 'lead' }, 'Walk around with your phone. The meter fills as you get closer to the detector that is chirping.'),
-    h('a', { class: 'btn primary big block', href: '#/find' }, 'Find chirp'),
+    h('div', { class: 'hero' }, mas, h('div', { class: 'bubble' }, line)),
+    h('a', { class: 'btn primary big block', href: '#/find' }, 'Find the chirp'),
   ];
 
   if (due.length) {
     nodes.push(h('h2', null, 'Do soon'));
-    nodes.push(h('div', null, due.map((d) => h('div', { class: 'rem' }, h('strong', null, d.title), d.body, d.go ? h('div', { class: 'row' }, h('a', { class: 'btn solid', href: d.go }, 'Start')) : null))));
+    nodes.push(h('div', { class: 'panel' }, due.map((d) => h('div', { class: 'rem' },
+      h('strong', null, d.title), d.body,
+      d.go ? h('div', { class: 'row' }, h('a', { class: 'btn solid', href: d.go }, 'Start')) : null))));
   }
 
   nodes.push(h('h2', null, 'Your detectors'));
   if (!list.length) {
     nodes.push(h('p', null, 'None saved yet. Find the chirping one first, or add a detector by hand.'));
-    nodes.push(h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/add' }, 'Add a detector')));
+    nodes.push(h('div', { class: 'row split' }, h('a', { class: 'btn solid', href: '#/add' }, 'Add a detector'), h('a', { class: 'btn', href: '#/demo' }, 'Try the demo')));
   } else {
     nodes.push(h('p', null, `${list.length} saved. ${needs.length ? `${needs.length} need${needs.length === 1 ? 's' : ''} attention.` : 'All look fine.'}`));
-    nodes.push(h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/detectors' }, 'See list'), h('a', { class: 'btn', href: '#/test' }, 'Run test')));
-    nodes.push(h('p', { class: 'muted' }, n ? `You have tested every detector ${n} month${n === 1 ? '' : 's'} in a row.` : 'No full test run yet.'));
+    nodes.push(h('div', { class: 'row split' }, h('a', { class: 'btn', href: '#/detectors' }, 'My detectors'), h('a', { class: 'btn solid', href: '#/test' }, 'Run test')));
   }
 
   nodes.push(footer());
@@ -111,38 +218,51 @@ function footer() {
 }
 
 // ---------- find chirp ----------
-function findView() {
+// mode: 'real' listens through the microphone. 'practice' plays chirps through
+// the speaker that the microphone then hears. 'sim' uses scripted readings.
+function findView(mode = 'real') {
   const wrap = h('div');
-  show(h('h1', null, 'Find chirp'), wrap);
+  const mas = mascot('idle', 104);
+  show(h('h1', null, 'Find the chirp'), wrap);
 
   let listener = null;
   let raf = 0;
   let wake = null;
   let alive = true;
+  let calmTimer = 0;
 
   cleanup = () => {
     alive = false;
     cancelAnimationFrame(raf);
+    clearTimeout(calmTimer);
     listener?.stop();
     wake?.release?.().catch(() => {});
   };
 
   const idle = (error) => {
+    setMood(mas, error ? 'worried' : 'idle');
     fill(wrap, [
-      h('p', { class: 'lead' }, 'Stand in the middle of the house and tap Start. Keep the phone out in front of you.'),
+      h('div', { class: 'hero' }, mas, h('div', { class: 'bubble' }, 'Stand in the middle of the house and tap start. Hold the phone out in front of you.')),
       h('ol', null,
         h('li', null, 'Wait for a chirp. They come about once a minute.'),
-        h('li', null, 'Walk toward the room where the meter reads higher.'),
+        h('li', null, 'Walk toward where the meter reads higher.'),
         h('li', null, 'Stop after a few steps and wait for the next chirp.'),
-        h('li', null, 'When the meter is full and the phone vibrates, look up.')),
+        h('li', null, 'When the meter is full and the phone buzzes, look up.')),
       error ? h('div', { class: 'error', role: 'alert' }, error) : null,
-      h('button', { class: 'btn primary big block', onclick: begin }, 'Start listening'),
+      h('button', { class: 'btn primary big block', onclick: () => begin('real') }, 'Start listening'),
       h('p', { class: 'hint' }, 'The microphone is used only on this screen. Nothing is recorded.'),
+      h('div', { class: 'panel demo-panel' },
+        h('h3', null, 'No chirping detector handy?'),
+        h('p', { class: 'muted small' }, 'Try the demo. Practice chirps play from your speaker and the microphone really hears them.'),
+        h('div', { class: 'row split' },
+          h('button', { class: 'btn solid', onclick: () => begin('practice') }, 'Play practice chirps'),
+          h('button', { class: 'btn', onclick: () => begin('sim') }, 'Simulate a walk'))),
     ]);
   };
 
-  async function begin() {
-    listener = new Listener();
+  async function begin(how) {
+    mode = how;
+    listener = how === 'sim' ? walkThrough() : new Listener();
     try {
       await listener.start();
     } catch (e) {
@@ -152,29 +272,35 @@ function findView() {
     }
     try { wake = await navigator.wakeLock?.request('screen'); } catch {}
     run();
+    if (how === 'practice') playPracticeChirps().catch(() => {});
   }
 
   function run() {
-    const segs = Array.from({ length: 20 }, () => h('i'));
+    setMood(mas, 'listening');
+    const segs = Array.from({ length: 20 }, (_, i) => h('i', { class: i < 7 ? 'a' : i < 14 ? 'b' : 'c' }));
     const num = h('div', { class: 'meter-num' }, '0');
-    const word = h('div', { class: 'meter-word' }, 'Waiting for a chirp');
+    const word = h('div', { class: 'meter-word' }, 'Waiting');
     const live = h('b');
     const hist = h('div', { class: 'history', 'aria-hidden': 'true' });
-    const trend = h('p', { class: 'lead', 'aria-live': 'polite' }, 'Listening. Chirps come about once a minute.');
+    const trend = h('div', { class: 'bubble', 'aria-live': 'polite' },
+      mode === 'practice' ? 'Practice chirps are coming from your speaker. Keep the phone near it and turn the volume up.' :
+      mode === 'sim' ? 'Demo: pretend you are walking toward the detector.' :
+      'Listening. The first chirp can take up to a minute.');
     const found = h('div');
     const meter = h('div', { class: 'meter', role: 'meter', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': 0, 'aria-label': 'Chirp loudness' }, segs);
 
-    wrap.replaceChildren(
+    fill(wrap, [
+      mode === 'real' ? null : h('div', { class: 'tag' }, mode === 'practice' ? 'Demo: practice chirps' : 'Demo: simulated'),
+      h('div', { class: 'hero' }, mas, trend),
       h('div', { class: 'meter-wrap' },
         h('div', { class: 'meter-read' }, num, word),
         meter,
         h('div', { class: 'live' }, h('span', null, 'Room'), h('span', { class: 'bar' }, live))),
-      trend,
       found,
       h('h3', null, 'Recent chirps'),
       hist,
-      h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => { cleanup(); go('#/'); } }, 'Stop')),
-    );
+      h('div', { class: 'row' }, h('button', { class: 'btn block', onclick: () => { cleanup(); go('#/'); } }, 'Stop')),
+    ]);
 
     const det = new ChirpDetector();
     const chirps = [];
@@ -183,15 +309,17 @@ function findView() {
     let shown = -1;
     let lastT = performance.now();
 
+    const say = (t) => { trend.textContent = t; };
+
     const paint = (v) => {
       const r = Math.round(v);
       if (r === shown) return;
       shown = r;
       const lit = Math.round((v / 100) * segs.length);
-      segs.forEach((s, i) => { s.className = i < lit ? (i >= 15 ? 'hot' : 'on') : ''; });
+      segs.forEach((s, i) => s.classList.toggle('on', i < lit));
       num.textContent = String(r);
       meter.setAttribute('aria-valuenow', r);
-      word.textContent = r >= 88 ? 'Right here' : r >= 65 ? 'Very close' : r >= 35 ? 'Getting close' : r > 0 ? 'Faint' : 'Waiting for a chirp';
+      word.textContent = r >= 88 ? 'Right here' : r >= 65 ? 'Very close' : r >= 35 ? 'Getting close' : r > 0 ? 'Faint' : 'Waiting';
     };
 
     const tick = (now) => {
@@ -209,20 +337,31 @@ function findView() {
         chirps.push(v);
         held = v;
         heldAt = now;
-        if (prev == null) trend.textContent = 'Heard a chirp. Take a few steps, then wait for the next one.';
-        else if (v - prev > 6) trend.textContent = 'Louder than last time. You are getting closer.';
-        else if (prev - v > 6) trend.textContent = 'Quieter than last time. Turn around.';
-        else trend.textContent = 'About the same as last time. Try another direction.';
-        hist.replaceChildren(...chirps.slice(-12).map((c) => h('span', { style: `height:${Math.max(4, c)}%` })));
+
+        setMood(mas, 'alert');
+        react(mas, 'ping');
+        clearTimeout(calmTimer);
+        calmTimer = setTimeout(() => setMood(mas, v >= 88 ? 'happy' : 'listening'), 900);
+
+        if (prev == null) say('Heard it. Take a few steps, then wait for the next one.');
+        else if (v - prev > 6) say('Louder than last time. You are getting closer.');
+        else if (prev - v > 6) say('Quieter than last time. Turn around.');
+        else say('About the same as last time. Try another direction.');
+        hist.replaceChildren(...chirps.slice(-12).map((c) => h('span', { style: `height:${Math.max(6, c)}%` })));
+
+        meter.classList.remove('hit');
         if (v >= 88) {
+          void meter.offsetWidth;
+          meter.classList.add('hit');
           buzz([250, 120, 250, 120, 400]);
-          trend.textContent = 'This is very likely the one. Look up at the ceiling and walls here.';
-          found.replaceChildren(h('div', { class: 'panel alarm' },
+          say('This is very likely the one. Look up at the ceiling and walls here.');
+          fill(found, [h('div', { class: 'panel alarm' },
             h('h3', null, 'Found it?'),
-            h('p', null, 'Save it now so you can track its battery and age.'),
-            h('div', { class: 'row' },
+            h('p', null, 'Save it now so I can track its battery and age.'),
+            h('div', { class: 'row stack' },
               h('a', { class: 'btn primary', href: '#/add', onclick: () => cleanup() }, 'Save this detector'),
-              h('button', { class: 'btn', onclick: () => found.replaceChildren() }, 'Keep looking'))));
+              h('button', { class: 'btn ghost', onclick: () => fill(found, []) }, 'Keep looking')))]);
+          confetti(found);
         }
       }
 
@@ -234,34 +373,38 @@ function findView() {
     raf = requestAnimationFrame(tick);
   }
 
-  idle();
+  if (mode === 'real') idle();
+  else begin(mode);
 }
 
 // ---------- detector list ----------
 function listView() {
   const list = S.detectors();
-  const nodes = [h('h1', null, 'Detectors')];
+  const nodes = [h('div', { class: 'head-row' }, h('h1', null, 'Detectors'),
+    list.length ? h('a', { class: 'btn small solid', href: '#/add' }, 'Add') : null)];
   if (!list.length) {
-    nodes.push(h('p', { class: 'lead' }, 'Nothing saved yet.'));
+    nodes.push(h('div', { class: 'hero' }, mascot('sleepy', 104), h('div', { class: 'bubble' }, 'Nothing saved yet. Add your first detector and I\'ll keep an eye on it.')));
+    nodes.push(h('div', { class: 'row stack' },
+      h('a', { class: 'btn solid big', href: '#/add' }, 'Add a detector'),
+      h('button', { class: 'btn', onclick: () => { S.loadDemo(); toast('Sample detectors loaded'); listView(); replayEnter(); updateStreak(); } }, 'Load sample detectors')));
   } else {
     nodes.push(h('ul', { class: 'list' }, list.map(card)));
   }
-  nodes.push(h('div', { class: 'row' }, h('a', { class: 'btn solid', href: '#/add' }, 'Add a detector')));
   show(...nodes);
 }
 
-function card(d) {
+function card(d, i) {
   const s = S.statusOf(d);
   const rep = S.replaceBy(d);
-  return h('li', { class: 'card' },
+  return h('li', { class: 'card', style: `--i:${i}` },
     h('div', { class: 'card-head' }, h('h3', null, d.name), badge(s)),
     s.detail ? h('p', { class: 'muted small' }, s.detail) : null,
     h('dl', null,
       h('dt', null, 'Battery changed'), h('dd', null, fmt(d.batteryDate)),
       h('dt', null, 'Made'), h('dd', null, d.madeDate ? `${fmtMonth(d.madeDate)} (${ageText(d.madeDate)} old)` : 'Unknown'),
       h('dt', null, 'Replace by'), h('dd', null, rep ? fmtMonth(rep) : 'Unknown')),
-    h('div', { class: 'row' },
-      h('button', { class: 'btn', onclick: () => { S.updateDetector(d.id, { batteryDate: today() }); listView(); } }, 'Changed battery today'),
+    h('div', { class: 'row split wide-first' },
+      h('button', { class: 'btn', onclick: () => { S.updateDetector(d.id, { batteryDate: today() }); toast(`Battery date saved for ${d.name}`); listView(); replayEnter(); } }, 'Changed battery today'),
       h('a', { class: 'btn', href: `#/detector/${d.id}` }, 'Edit')));
 }
 
@@ -277,6 +420,10 @@ function formView(existing) {
   const made = h('input', { type: 'date', id: 'made', value: d.madeDate, max: today() });
   const ocrOut = h('div', { 'aria-live': 'polite' });
   const err = h('div', { role: 'alert' });
+  const chipEls = PLACES.map((p) => h('button', { type: 'button', class: 'chip', onclick: () => { name.value = p; syncChips(); } }, p));
+  const syncChips = () => chipEls.forEach((c) => c.classList.toggle('on', c.textContent === name.value.trim()));
+  name.addEventListener('input', syncChips);
+  syncChips();
 
   const photo = h('input', {
     type: 'file', id: 'photo', accept: 'image/*', capture: 'environment',
@@ -284,19 +431,19 @@ function formView(existing) {
       const file = e.target.files[0];
       if (!file) return;
       const bar = h('b');
-      ocrOut.replaceChildren(h('div', { class: 'loading' }, h('span', null, 'Reading label'), h('span', { class: 'bar' }, bar)));
+      fill(ocrOut, [h('div', { class: 'loading' }, h('span', null, 'Reading label'), h('span', { class: 'bar' }, bar))]);
       try {
         const { found } = await readLabel(file, (m) => {
           if (m.status === 'recognizing text') bar.style.width = `${Math.round(m.progress * 100)}%`;
         });
         if (found) {
           made.value = found.date;
-          ocrOut.replaceChildren(h('p', { class: 'hint' }, `Read ${found.exact ? fmt(found.date) : fmtMonth(found.date) + ' (month or year only)'} from the label. Check that it matches.`));
+          fill(ocrOut, [h('div', { class: 'panel alarm' }, `Read ${found.exact ? fmt(found.date) : fmtMonth(found.date) + ' (month or year only)'} from the label. Check that it matches.`)]);
         } else {
-          ocrOut.replaceChildren(h('p', { class: 'hint' }, 'Could not find a date. Try a closer, brighter photo, or type it in from the label.'));
+          fill(ocrOut, [h('p', { class: 'hint' }, 'Could not find a date. Try a closer, brighter photo, or type it in from the label.')]);
         }
       } catch {
-        ocrOut.replaceChildren(h('p', { class: 'hint' }, 'The label reader could not run here. Type the date from the label.'));
+        fill(ocrOut, [h('p', { class: 'hint' }, 'The label reader could not run here. Type the date from the label.')]);
       }
     },
   });
@@ -304,7 +451,7 @@ function formView(existing) {
   const save = () => {
     const nm = name.value.trim();
     if (!nm) {
-      err.replaceChildren(h('div', { class: 'error' }, 'Give the detector a location name.'));
+      fill(err, [h('div', { class: 'error' }, 'Give the detector a location name.')]);
       name.focus();
       return;
     }
@@ -318,7 +465,7 @@ function formView(existing) {
     h('h1', null, editing ? 'Edit detector' : 'Save this detector'),
     h('label', { for: 'name' }, 'Where is it?'),
     name,
-    h('div', { class: 'chips' }, PLACES.map((p) => h('button', { type: 'button', class: 'chip', onclick: () => { name.value = p; } }, p))),
+    h('div', { class: 'chips' }, chipEls),
     h('label', { for: 'photo' }, 'Photo of the back of the detector'),
     photo,
     h('p', { class: 'hint' }, 'Twist it off the ceiling and photograph the label. The date is read on your phone and the photo is not kept.'),
@@ -329,61 +476,97 @@ function formView(existing) {
     battery,
     h('div', { class: 'row' }, h('button', { type: 'button', class: 'btn', onclick: () => { battery.value = today(); } }, 'Changed it today')),
     err,
-    h('div', { class: 'row' },
-      h('button', { class: 'btn primary', onclick: save }, 'Save'),
-      h('a', { class: 'btn', href: '#/detectors' }, 'Cancel')),
-    editing ? h('div', { class: 'row' }, h('button', { class: 'btn danger', onclick: () => {
-      if (confirm(`Remove ${existing.name}?`)) { S.removeDetector(existing.id); go('#/detectors'); }
-    } }, 'Remove detector')) : null,
+    h('div', { class: 'row stack form-actions' },
+      h('button', { class: 'btn primary big', onclick: save }, 'Save'),
+      h('a', { class: 'btn ghost', href: '#/detectors' }, 'Cancel'),
+      editing ? h('button', { class: 'btn ghost danger', onclick: () => {
+        if (confirm(`Remove ${existing.name}?`)) { S.removeDetector(existing.id); go('#/detectors'); }
+      } }, 'Remove detector') : null),
   );
 }
 
 // ---------- monthly test ----------
-function testView() {
+function progress(states) {
+  return h('div', { class: 'progress', 'aria-hidden': 'true' }, states.map((s) => h('i', { class: s })));
+}
+
+// mode: 'real' uses the microphone. 'demo' uses scripted readings: every
+// detector passes except the last, which stays silent so the failure screen
+// can be shown too.
+function testView(mode = 'real') {
   const list = S.detectors();
   if (!list.length) {
-    show(h('h1', null, 'Test'), h('p', { class: 'lead' }, 'Save a detector first, then come back to test it.'),
-      h('div', { class: 'row' }, h('a', { class: 'btn solid', href: '#/add' }, 'Add a detector')));
+    show(h('h1', null, 'Test'),
+      h('div', { class: 'hero' }, mascot('sleepy', 104), h('div', { class: 'bubble' }, 'Save a detector first, then come back and I\'ll help you test it.')),
+      h('div', { class: 'row stack' },
+        h('a', { class: 'btn solid big', href: '#/add' }, 'Add a detector'),
+        h('button', { class: 'btn', onclick: () => { S.loadDemo(); toast('Sample detectors loaded'); go('#/test/demo'); } }, 'Load samples and run a demo')));
     return;
   }
 
+  const demo = mode === 'demo';
+  const limit = demo ? 7 : 20;
   const results = [];
   let listener = null;
   let raf = 0;
   let alive = true;
   cleanup = () => { alive = false; cancelAnimationFrame(raf); listener?.stop(); };
 
+  const bars = (i, current = true) => progress(list.map((_, k) => {
+    if (k < results.length) return results[k].pass ? 'done' : 'bad';
+    return k === i && current ? 'current' : '';
+  }));
+
   const intro = (error) => show(
-    h('h1', null, 'Test'),
-    h('p', { class: 'lead' }, `${list.length} detector${list.length === 1 ? '' : 's'} to test. For each one, hold the phone near it and press its test button.`),
-    h('p', null, 'Test alarms are loud. Keep the phone about an arm\'s length away.'),
+    h('h1', null, demo ? 'Demo test' : 'Monthly test'),
+    h('div', { class: 'hero' }, mascot(error ? 'worried' : 'listening', 104),
+      h('div', { class: 'bubble' }, demo
+        ? 'Demo: each detector sounds automatically, except the last one so you can see a failure.'
+        : `${list.length} detector${list.length === 1 ? '' : 's'} to check. Hold the phone near each one and press its test button.`)),
+    demo ? null : h('p', { class: 'muted' }, 'Test alarms are loud. Keep the phone about an arm\'s length away.'),
     error ? h('div', { class: 'error', role: 'alert' }, error) : null,
-    h('button', { class: 'btn primary big block', onclick: begin }, 'Start test'),
+    h('button', { class: 'btn primary big block', onclick: begin }, demo ? 'Start demo test' : 'Start test'),
+    demo ? null : h('div', { class: 'panel demo-panel' },
+      h('h3', null, 'No detector handy?'),
+      h('p', { class: 'muted small' }, 'Run a quick demo with scripted alarms. You can also play an alarm sound from this screen\'s speaker during a real test.'),
+      h('a', { class: 'btn', href: '#/test/demo' }, 'Run a demo test')),
   );
 
   async function begin() {
-    listener = new Listener();
-    try { await listener.start(); } catch (e) { listener = null; intro(micErrorText(e)); return; }
+    if (!demo) {
+      listener = new Listener();
+      try { await listener.start(); } catch (e) { listener = null; intro(micErrorText(e)); return; }
+    }
     step(0);
   }
 
   function step(i) {
     if (i >= list.length) return summary();
     const d = list[i];
-    const timer = h('div', { class: 'timer' }, '20');
-    const status = h('p', { class: 'lead', 'aria-live': 'polite' }, 'Press the test button now.');
+    if (demo) {
+      const silent = list.length > 1 && i === list.length - 1;
+      listener = new ScriptedListener({ alarmAt: silent ? null : 1400 });
+    }
+    const timer = h('div', { class: 'timer' }, String(limit));
+    const tbar = h('b');
+    const mas = mascot('listening', 96);
+    const status = h('div', { class: 'bubble', 'aria-live': 'polite' }, demo ? 'Waiting for the alarm...' : 'Press the test button now.');
     show(
+      bars(i),
       h('p', { class: 'steps' }, `Detector ${i + 1} of ${list.length}`),
       h('div', { class: 'test-name' }, d.name),
-      h('p', null, 'Hold the phone near it and press and hold its test button.'),
-      timer, status,
-      h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => finish(false, 'Skipped') }, 'It did not sound')),
+      h('div', { class: 'hero' }, mas, status),
+      timer,
+      h('div', { class: 'timebar' }, tbar),
+      h('div', { class: 'row stack' },
+        h('button', { class: 'btn', onclick: () => finish(false, 'Skipped') }, 'It did not sound'),
+        demo ? null : h('button', { class: 'btn ghost', onclick: () => { playTestAlarm().catch(() => {}); } }, 'Demo: play an alarm sound')),
     );
+    replayEnter();
 
     const t0 = performance.now();
     let last = t0;
     let loudMs = 0;
-    let peakOver = 0;
     let floor = null;
     const warm = [];
     let done = false;
@@ -393,7 +576,7 @@ function testView() {
       done = true;
       cancelAnimationFrame(raf);
       results.push({ id: d.id, name: d.name, pass, note });
-      result(i, pass, note);
+      result(i, pass);
     };
 
     const tick = (now) => {
@@ -412,69 +595,85 @@ function testView() {
         warm.sort((a, b) => a - b);
         floor = warm.length ? warm[warm.length >> 1] : r.level;
       }
-      const over = r.level - floor;
-      const loud = over > 20 && r.tonal > 14;
-      if (loud) { loudMs += dt; peakOver = Math.max(peakOver, over); }
+      const loud = r.level - floor > 20 && r.tonal > 14;
+      if (loud) loudMs += dt;
       else floor += (r.level - floor) * 0.02;
 
-      timer.textContent = String(Math.max(0, Math.ceil(20 - elapsed / 1000)));
-      status.textContent = loud ? 'Hearing the alarm.' : loudMs > 0 ? 'Heard something. Keep holding the button.' : 'Press the test button now.';
+      const left = Math.max(0, limit - elapsed / 1000);
+      timer.textContent = String(Math.ceil(left));
+      tbar.style.width = `${(left / limit) * 100}%`;
+      status.textContent = loud ? 'I can hear it.' : loudMs > 0 ? 'Heard something. Keep holding the button.' : (demo ? 'Waiting for the alarm...' : 'Press the test button now.');
+      setMood(mas, loud ? 'alert' : 'listening');
 
       if (loudMs >= 600) return finish(true, 'Alarm heard');
-      if (elapsed > 20000) return finish(false, 'No alarm heard');
+      if (elapsed > limit * 1000) return finish(false, 'No alarm heard');
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
   }
 
-  function result(i, pass, note) {
-    const next = () => step(i + 1);
+  function result(i, pass) {
+    const mas = mascot(pass ? 'happy' : 'worried', 104);
+    const last = i + 1 >= list.length;
     show(
+      bars(i, false),
       h('p', { class: 'steps' }, `Detector ${i + 1} of ${list.length}`),
       h('div', { class: 'test-name' }, list[i].name),
-      pass
-        ? h('p', { class: 'pass big-number' }, 'Passed')
-        : h('div', null,
-          h('p', { class: 'fail big-number' }, 'Not heard'),
-          h('div', { class: 'error' }, 'The app did not hear the alarm. Check the battery, then test again. If it still fails, replace the detector.')),
-      h('div', { class: 'row' },
-        pass ? null : h('button', { class: 'btn', onclick: () => { results.pop(); step(i); } }, 'Test again'),
-        h('button', { class: 'btn solid', onclick: next }, i + 1 < list.length ? 'Next detector' : 'See summary')),
+      h('div', { class: 'hero' }, mas, h('div', { class: 'bubble' }, pass ? 'Loud and clear. This one works.' : 'I did not hear the alarm. Check the battery, then test again.')),
+      h('p', { class: `${pass ? 'pass' : 'fail'} big-number` }, pass ? 'Passed' : 'Not heard'),
+      h('div', { class: 'row stack' },
+        h('button', { class: pass ? 'btn good' : 'btn solid', onclick: () => step(i + 1) }, last ? 'See summary' : 'Next detector'),
+        pass ? null : h('button', { class: 'btn ghost', onclick: () => { results.pop(); step(i); } }, 'Test again')),
     );
+    replayEnter();
+    if (pass) { react(mas, 'bounce'); buzz(30); } else { react(mas, 'shake'); buzz([60, 60, 60]); }
   }
 
   function summary() {
     listener?.stop();
     listener = null;
-    S.recordTestRun(results);
+    if (!demo) S.recordTestRun(results);
     const bad = results.filter((r) => !r.pass);
     const n = S.streak();
+    const mas = mascot(bad.length ? 'worried' : 'happy', 112);
+    const num = h('p', { class: 'big-number' }, '0');
     show(
+      bars(-1, false),
       h('h1', null, bad.length ? `${bad.length} need${bad.length === 1 ? 's' : ''} attention` : 'All passed'),
-      h('div', null, results.map((r) => h('div', { class: 'result' }, h('span', null, r.name), h('span', { class: r.pass ? 'pass' : 'fail' }, r.pass ? 'Passed' : 'Needs attention')))),
-      bad.length ? h('div', { class: 'error' }, 'For each one that failed: replace the battery and test again. If it still does not sound, replace the detector.') : null,
+      h('div', { class: 'hero' }, mas, h('div', { class: 'bubble' }, bad.length ? 'Replace the battery in the ones that failed, then test them again.' : 'Every detector sounded off. That is a perfect month.')),
+      h('div', { class: 'panel' }, results.map((r, k) => h('div', { class: 'result', style: `--i:${k}` }, h('span', null, r.name), h('span', { class: r.pass ? 'pass' : 'fail' }, r.pass ? 'Passed' : 'Needs attention')))),
+      bad.length ? h('div', { class: 'error' }, 'If one still does not sound after a new battery, replace the detector.') : null,
+      demo ? h('p', { class: 'hint' }, 'Demo results are not saved to your streak.') : null,
       h('h2', null, 'Streak'),
-      h('p', { class: 'big-number' }, String(n)),
+      num,
       h('p', { class: 'muted' }, n ? `month${n === 1 ? '' : 's'} in a row with every detector passing.` : 'No full passing month yet. Fix the ones above and run the test again.'),
-      h('div', { class: 'row' }, h('a', { class: 'btn solid', href: '#/' }, 'Done'), h('a', { class: 'btn', href: '#/detectors' }, 'Detector list')),
+      h('div', { class: 'row split' }, h('a', { class: 'btn solid', href: '#/' }, 'Done'), h('a', { class: 'btn', href: '#/detectors' }, 'Detector list')),
     );
+    replayEnter();
+    updateStreak();
+    setTimeout(() => {
+      countUp(num, n);
+      if (!bad.length) { react(mas, 'bounce'); confetti(mas); buzz([40, 40, 80]); }
+      else react(mas, 'shake');
+    }, 250);
   }
 
-  intro();
+  if (demo) begin();
+  else intro();
 }
 
 // ---------- reminders ----------
 function remindersView() {
   const dst = nextDst();
   const rows = [];
-  if (dst) rows.push([fmt(iso(dst.date)), `Clocks ${dst.kind === 'start' ? 'spring forward' : 'fall back'}. Change all batteries.`]);
+  if (dst) rows.push([iso(dst.date), `Clocks ${dst.kind === 'start' ? 'spring forward' : 'fall back'}. Change all batteries.`]);
   const first = new Date();
   first.setDate(1);
   first.setMonth(first.getMonth() + 1);
-  rows.push([fmt(iso(first)), 'Monthly test, then the first of every month.']);
+  rows.push([iso(first), 'Monthly test, then the first of every month.']);
   for (const d of S.detectors()) {
     if (!d.madeDate) continue;
-    rows.push([fmt(S.replaceBy(d)), `Replace ${d.name}. Ten years old.`]);
+    rows.push([S.replaceBy(d), `Replace ${d.name}. Ten years old.`]);
   }
   rows.sort((a, b) => (a[0] < b[0] ? -1 : 1));
 
@@ -488,7 +687,7 @@ function remindersView() {
     h('h1', null, 'Reminders'),
     h('p', { class: 'lead' }, 'Battery changes when the clocks change, a test every month, and a warning before each detector turns ten.'),
     h('h2', null, 'Coming up'),
-    h('div', null, rows.map(([when, what]) => h('div', { class: 'rem' }, h('strong', null, when), what))),
+    h('div', { class: 'panel' }, rows.map(([when, what]) => h('div', { class: 'rem' }, h('strong', null, fmt(when)), what))),
     h('h2', null, 'Get alerts'),
     h('p', null, 'This app has no server, so it cannot wake your phone by itself. Two ways to get alerts anyway:'),
     h('h3', null, 'Calendar (most reliable)'),
@@ -501,6 +700,61 @@ function remindersView() {
       remindersView();
     } }, 'Turn on notifications')),
     notifyMsg,
+  );
+}
+
+// ---------- demo tools ----------
+function toast(message) {
+  const el = h('div', { class: 'toast', role: 'status' }, message);
+  document.body.append(el);
+  setTimeout(() => el.classList.add('out'), 2200);
+  setTimeout(() => el.remove(), 2900);
+}
+
+function demoView() {
+  const haveDetectors = S.detectors().length > 0;
+  show(
+    h('h1', null, 'Demo tools'),
+    h('div', { class: 'hero' }, mascot('happy', 104), h('div', { class: 'bubble' }, 'Everything here works without a real chirping detector.')),
+
+    h('h2', null, '1. Add sample data'),
+    h('div', { class: 'panel' },
+      h('p', null, 'Four detectors with different problems (fine, battery due, replace soon, expired) and a three month test streak.'),
+      h('div', { class: 'row split' },
+        h('button', { class: 'btn solid', onclick: () => { S.loadDemo(); updateStreak(); toast('Sample detectors loaded'); go('#/detectors'); } }, 'Load samples'),
+        h('button', { class: 'btn danger', onclick: () => {
+          if (confirm('Remove every detector and all test history from this phone?')) { S.clearAll(); updateStreak(); toast('Everything cleared'); demoView(); replayEnter(); }
+        } }, 'Clear everything'))),
+
+    h('h2', null, '2. Find a chirp'),
+    h('div', { class: 'panel' },
+      h('p', null, 'Practice chirps play from your speaker, getting louder like you are walking toward a detector. The microphone hears them for real. Turn the volume up and keep the phone close to the speaker.'),
+      h('div', { class: 'row split' },
+        h('a', { class: 'btn primary', href: '#/find/practice' }, 'Play practice chirps'),
+        h('a', { class: 'btn', href: '#/find/sim' }, 'Simulate a walk'))),
+
+    h('h2', null, '3. Monthly test'),
+    h('div', { class: 'panel' },
+      h('p', null, 'Runs through your detectors with scripted alarms. The last one stays silent so you can show a failure.'),
+      h('div', { class: 'row' }, h('button', { class: 'btn solid', onclick: () => {
+        if (!haveDetectors) { S.loadDemo(); updateStreak(); toast('Sample detectors loaded'); }
+        go('#/test/demo');
+      } }, 'Run demo test'))),
+
+    h('h2', null, '4. Reminders'),
+    h('div', { class: 'panel' },
+      h('p', null, 'Send yourself a notification to see what a reminder looks like.'),
+      h('div', { class: 'row split' },
+        h('button', { class: 'btn', onclick: async () => {
+          const r = await enableNotifications();
+          if (r === 'granted') {
+            try { new Notification('Monthly smoke detector test', { body: 'Test each detector now. It takes a minute.' }); } catch {}
+            toast('Notification sent');
+          } else toast(r === 'unsupported' ? 'Notifications are not available here' : 'Notifications are blocked');
+        } }, 'Send test notification'),
+        h('a', { class: 'btn', href: '#/reminders' }, 'See reminders'))),
+
+    h('div', { class: 'row' }, h('a', { class: 'btn ghost', href: '#/welcome' }, 'Replay intro')),
   );
 }
 
@@ -518,14 +772,16 @@ function aboutView() {
     h('p', null, 'A working smoke alarm is what protects you. Test with the detector\'s own test button, replace detectors that fail or are ten years old, and never leave a detector without a battery.'),
     h('p', null, 'If an alarm sounds and there may be a fire, leave the building and call emergency services. Do not use this app.'),
     h('p', null, 'The software is provided as is, without warranty of any kind.'),
-    h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/' }, 'Back')),
+    h('div', { class: 'row split' }, h('a', { class: 'btn', href: '#/' }, 'Back'), h('a', { class: 'btn', href: '#/demo' }, 'Demo tools')),
   );
 }
 
 // ---------- boot ----------
+// The app always opens on the welcome screen.
+history.replaceState(null, '', '#/welcome');
 route();
 fireDueNotifications();
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
 }

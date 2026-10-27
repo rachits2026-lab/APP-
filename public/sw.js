@@ -1,9 +1,9 @@
-// Cache-first for everything on this origin so the app, fonts and OCR data
-// all work with no connection.
-const CACHE = 'chirp-hunter-v1';
+// Cache-first for everything on this origin so the app, fonts, mascot and OCR
+// data all work with no connection.
+const CACHE = 'chirp-hunter-v2';
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/', '/manifest.webmanifest', '/icon.svg'])));
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './manifest.webmanifest', './icon.svg'])));
   self.skipWaiting();
 });
 
@@ -23,6 +23,6 @@ self.addEventListener('fetch', (e) => {
         caches.open(CACHE).then((c) => c.put(req, copy));
       }
       return res;
-    }).catch(() => caches.match('/'))),
+    }).catch(() => caches.match('./'))),
   );
 });

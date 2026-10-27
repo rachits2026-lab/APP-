@@ -1,4 +1,4 @@
-import { today, addYears, daysBetween, LIFESPAN_YEARS, monthKey, prevMonthKey } from './dates.js';
+import { today, iso, addYears, daysBetween, LIFESPAN_YEARS, monthKey, prevMonthKey } from './dates.js';
 
 const KEY = 'chirphunter.v1';
 const empty = () => ({ detectors: [], tests: {}, settings: { notify: false, lastNotified: {} } });
@@ -23,13 +23,20 @@ function save() {
   listeners.forEach((fn) => fn());
 }
 
+// crypto.randomUUID only exists on https and localhost; a phone opening the dev
+// server over plain http would otherwise fail to save anything.
+function newId() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export const onChange = (fn) => listeners.add(fn);
 export const getState = () => state;
 export const detectors = () => state.detectors;
 export const getDetector = (id) => state.detectors.find((d) => d.id === id);
 
 export function addDetector(d) {
-  const det = { id: crypto.randomUUID(), name: '', batteryDate: today(), madeDate: '', createdAt: today(), ...d };
+  const det = { id: newId(), name: '', batteryDate: today(), madeDate: '', createdAt: today(), ...d };
   state.detectors.push(det);
   save();
   return det;
@@ -42,6 +49,36 @@ export function updateDetector(id, patch) {
 
 export function removeDetector(id) {
   state.detectors = state.detectors.filter((d) => d.id !== id);
+  save();
+}
+
+// A believable home for demos: one of each status, plus three months of
+// passed tests so the streak shows.
+export function loadDemo() {
+  const now = new Date();
+  const ago = (months) => iso(new Date(now.getFullYear(), now.getMonth() - months, Math.min(now.getDate(), 28)));
+  const mk = (name, madeMonthsAgo, batteryMonthsAgo) => ({
+    id: newId(), name, madeDate: ago(madeMonthsAgo), batteryDate: ago(batteryMonthsAgo), createdAt: today(),
+  });
+  state.detectors = [
+    mk('Upstairs hallway', 50, 3),
+    mk('Kitchen', 122, 5),
+    mk('Basement', 72, 14),
+    mk('Master bedroom', 112, 2),
+  ];
+  state.tests = {};
+  for (let i = 1; i <= 3; i++) {
+    state.tests[monthKey(new Date(now.getFullYear(), now.getMonth() - i, 1))] = {
+      allPassed: true,
+      at: ago(i),
+      results: state.detectors.map((d) => ({ id: d.id, name: d.name, pass: true })),
+    };
+  }
+  save();
+}
+
+export function clearAll() {
+  state = empty();
   save();
 }
 

@@ -4,6 +4,17 @@
 const BAND_LO = 2000;
 const BAND_HI = 5000;
 
+// One audio context for the whole app: the microphone listener and the demo
+// sounds share it, which also keeps phones from running out of contexts.
+let sharedCtx = null;
+export function getCtx() {
+  if (!sharedCtx || sharedCtx.state === 'closed') {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    sharedCtx = new AC();
+  }
+  return sharedCtx;
+}
+
 export class Listener {
   constructor() {
     this.ctx = null;
@@ -19,14 +30,13 @@ export class Listener {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
-    const AC = window.AudioContext || window.webkitAudioContext;
-    this.ctx = new AC();
+    this.ctx = getCtx();
     if (this.ctx.state === 'suspended') await this.ctx.resume();
-    const src = this.ctx.createMediaStreamSource(this.stream);
+    this.src = this.ctx.createMediaStreamSource(this.stream);
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 2048;
     this.analyser.smoothingTimeConstant = 0;
-    src.connect(this.analyser);
+    this.src.connect(this.analyser);
     this.freq = new Float32Array(this.analyser.frequencyBinCount);
     this.binHz = this.ctx.sampleRate / this.analyser.fftSize;
     this.lo = Math.floor(BAND_LO / this.binHz);
@@ -42,7 +52,8 @@ export class Listener {
     let peakBin = this.lo;
     const band = [];
     for (let i = this.lo; i <= this.hi; i++) {
-      const v = this.freq[i];
+      // Digital silence reads as -Infinity; keep the maths finite.
+      const v = Math.max(-120, this.freq[i]);
       band.push(v);
       if (v > peak) { peak = v; peakBin = i; }
     }
@@ -53,8 +64,9 @@ export class Listener {
 
   stop() {
     this.stream?.getTracks().forEach((t) => t.stop());
-    this.ctx?.close().catch(() => {});
-    this.stream = this.ctx = this.analyser = null;
+    this.src?.disconnect();
+    this.analyser?.disconnect();
+    this.stream = this.src = this.analyser = null;
   }
 }
 
